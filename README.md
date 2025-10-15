@@ -11,14 +11,14 @@ chmod +x vpn-install.sh
 # Executar como root
 sudo ./vpn-install.sh
 
-# Adicionar primeiro cliente:
-add-vpn-client meucelular
+# Menu de Gerenciamento:
+vpn-manager
 
-# Ver status:
-vpn-status
+# Script Completo (para reinstalação):
+sudo vpn-install.sh
 
-# Remover cliente:
-remove-vpn-client meucelular
+# Status Rápido:
+sudo vpn-install.sh status
 
 Ubuntu 22.04 LTS
 
