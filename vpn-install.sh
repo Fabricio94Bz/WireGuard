@@ -12,10 +12,11 @@ NC='\033[0m' # No Color
 WG_DIR="/etc/wireguard"
 CLIENTS_DIR="$WG_DIR/clients"
 SERVER_CONFIG="$WG_DIR/wg0.conf"
+SCRIPT_NAME="vpn-install.sh"
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Por favor, execute como root: sudo ./vpn-complete-setup.sh${NC}"
+    echo -e "${RED}Por favor, execute como root: sudo ./$SCRIPT_NAME${NC}"
     exit 1
 fi
 
@@ -46,6 +47,54 @@ pause() {
     echo -e "${YELLOW}"
     read -p "Pressione Enter para continuar..."
     echo -e "${NC}"
+}
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to show final instructions
+show_final_instructions() {
+    header
+    SERVER_IP=$(curl -4 -s ifconfig.co || echo "SEU_IP_AQUI")
+    echo -e "${GREEN}
+===================================================
+         INSTALAÇÃO CONCLUÍDA COM SUCESSO!
+===================================================
+
+${YELLOW}INFORMAÇÕES DO SERVIDOR:${NC}
+- Endpoint: ${SERVER_IP}:51820
+- Interface: wg0
+- Rede: 10.0.0.0/24
+
+${YELLOW}COMANDOS DISPONÍVEIS:${NC}
+- ${GREEN}vpn-manager${NC}          - Menu interativo de gerenciamento
+- ${GREEN}sudo $SCRIPT_NAME${NC} - Script completo (instalação + menu)
+
+${YELLOW}PRÓXIMOS PASSOS:${NC}
+1. Execute: ${GREEN}vpn-manager${NC}
+2. Adicione clientes pelo menu
+3. Use QR code ou arquivos .conf nos clientes
+
+${YELLOW}APPS WIREGUARD:${NC}
+- Android: Play Store
+- iOS: App Store  
+- Windows: Microsoft Store
+- macOS: App Store
+- Linux: pacote 'wireguard-tools'
+
+===================================================
+${NC}"
+
+    # Start management menu
+    echo ""
+    read -p "Abrir menu de gerenciamento agora? (s/N): " open_menu
+    if [[ $open_menu =~ ^[Ss]$ ]]; then
+        management_menu
+    else
+        echo -e "${GREEN}Execute 'vpn-manager' a qualquer momento para gerenciar sua VPN.${NC}"
+    fi
 }
 
 # =============================================================================
@@ -103,7 +152,7 @@ EOF
     log "Configurando firewall..."
     ufw allow 51820/udp comment "WireGuard VPN"
     ufw allow ssh comment "SSH"
-    ufw --force enable
+    echo "y" | ufw enable
     
     # Start WireGuard service
     log "Iniciando serviço WireGuard..."
@@ -120,8 +169,8 @@ EOF
 
 # Function to get server info
 get_server_info() {
-    SERVER_IP=$(curl -4 -s ifconfig.co)
-    SERVER_PUBLIC_KEY=$(cat $WG_DIR/publickey 2>/dev/null)
+    SERVER_IP=$(curl -4 -s ifconfig.co || echo "Não disponível")
+    SERVER_PUBLIC_KEY=$(cat $WG_DIR/publickey 2>/dev/null || echo "Não disponível")
     INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 }
 
@@ -133,6 +182,7 @@ list_clients() {
     
     if [ ! -d "$CLIENTS_DIR" ] || [ -z "$(ls -A $CLIENTS_DIR/*.conf 2>/dev/null)" ]; then
         echo -e "${YELLOW}Nenhum cliente configurado.${NC}"
+        pause
         return
     fi
     
@@ -159,6 +209,7 @@ list_clients() {
     
     echo ""
     echo -e "${CYAN}Total de clientes: $(ls -1 $CLIENTS_DIR/*.conf 2>/dev/null | wc -l)${NC}"
+    pause
 }
 
 # Function to add client
@@ -169,8 +220,15 @@ add_client() {
     
     read -p "Nome do cliente (sem espaços): " client_name
     
+    # Validate client name
     if [ -z "$client_name" ]; then
         echo -e "${RED}Nome do cliente não pode estar vazio.${NC}"
+        pause
+        return
+    fi
+    
+    if [[ "$client_name" =~ [^a-zA-Z0-9_-] ]]; then
+        echo -e "${RED}Nome do cliente só pode conter letras, números, hífen e underline.${NC}"
         pause
         return
     fi
@@ -181,16 +239,21 @@ add_client() {
         return
     fi
     
-    # Get next available IP
+    # Get next available IP - método melhorado
     last_ip=1
-    for client_file in $CLIENTS_DIR/*.conf; do
-        if [ -f "$client_file" ]; then
-            ip=$(grep "Address" "$client_file" | awk '{print $3}' | cut -d'.' -f4 | cut -d'/' -f1)
-            if [ "$ip" -gt "$last_ip" ]; then
-                last_ip=$ip
+    if [ -d "$CLIENTS_DIR" ]; then
+        for client_file in $CLIENTS_DIR/*.conf; do
+            if [ -f "$client_file" ]; then
+                ip_line=$(grep "Address" "$client_file")
+                if [[ $ip_line =~ [0-9]+\.[0-9]+\.[0-9]+\.([0-9]+) ]]; then
+                    ip="${BASH_REMATCH[1]}"
+                    if [ "$ip" -gt "$last_ip" ] 2>/dev/null; then
+                        last_ip=$ip
+                    fi
+                fi
             fi
-        fi
-    done
+        done
+    fi
     client_ip="10.0.0.$((last_ip + 1))"
     
     # Generate client keys
@@ -202,7 +265,7 @@ add_client() {
     client_private_key=$(cat $client_name-private.key)
     client_public_key=$(cat $client_name-public.key)
     server_public_key=$(cat $WG_DIR/publickey)
-    server_ip=$(curl -4 -s ifconfig.co)
+    server_ip=$(curl -4 -s ifconfig.co || echo "SEU_IP_AQUI")
     
     # Create client configuration
     cat > $client_name.conf << EOF
@@ -225,9 +288,13 @@ EOF
     echo -e "${YELLOW}IP: $client_ip${NC}"
     echo ""
     
-    # Display QR code
-    echo -e "${CYAN}=== QR CODE PARA O CLIENTE ===${NC}"
-    qrencode -t ansiutf8 < $client_name.conf
+    # Display QR code if qrencode is available
+    if command_exists qrencode; then
+        echo -e "${CYAN}=== QR CODE PARA O CLIENTE ===${NC}"
+        qrencode -t ansiutf8 < $client_name.conf
+    else
+        echo -e "${YELLOW}qrencode não instalado. Instale com: apt install qrencode${NC}"
+    fi
     
     echo ""
     echo -e "${CYAN}=== CONFIGURAÇÃO DO CLIENTE ===${NC}"
@@ -329,8 +396,10 @@ show_client_config() {
     cat "$CLIENTS_DIR/$client_name.conf"
     
     echo ""
-    echo -e "${CYAN}=== QR CODE ===${NC}"
-    qrencode -t ansiutf8 < "$CLIENTS_DIR/$client_name.conf"
+    if command_exists qrencode; then
+        echo -e "${CYAN}=== QR CODE ===${NC}"
+        qrencode -t ansiutf8 < "$CLIENTS_DIR/$client_name.conf"
+    fi
     
     pause
 }
@@ -353,12 +422,20 @@ show_server_status() {
     
     echo -e "${BLUE}Status do WireGuard:${NC}"
     echo "---------------------"
-    wg show
+    if systemctl is-active --quiet wg-quick@wg0; then
+        wg show
+    else
+        echo -e "${RED}Serviço WireGuard não está rodando${NC}"
+    fi
     
     echo ""
     echo -e "${BLUE}Conexões Ativas:${NC}"
     echo "------------------"
-    wg show wg0 transfers
+    if systemctl is-active --quiet wg-quick@wg0; then
+        wg show wg0 transfers
+    else
+        echo -e "${RED}Serviço WireGuard não está rodando${NC}"
+    fi
     
     pause
 }
@@ -373,6 +450,7 @@ restart_service() {
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Serviço reiniciado com sucesso!${NC}"
+        sleep 2
     else
         echo -e "${RED}Erro ao reiniciar o serviço.${NC}"
     fi
@@ -386,8 +464,15 @@ show_statistics() {
     echo -e "${CYAN}=== ESTATÍSTICAS DA VPN ===${NC}"
     echo ""
     
-    total_clients=$(ls -1 $CLIENTS_DIR/*.conf 2>/dev/null | wc -l)
-    connected_clients=$(wg show wg0 2>/dev/null | grep "peer:" | wc -l)
+    total_clients=0
+    if [ -d "$CLIENTS_DIR" ]; then
+        total_clients=$(ls -1 $CLIENTS_DIR/*.conf 2>/dev/null | wc -l)
+    fi
+    
+    connected_clients=0
+    if systemctl is-active --quiet wg-quick@wg0; then
+        connected_clients=$(wg show wg0 2>/dev/null | grep -c "peer:" || echo 0)
+    fi
     
     echo -e "${BLUE}Resumo:${NC}"
     echo "-------"
@@ -396,14 +481,14 @@ show_statistics() {
     echo -e "Clientes offline: ${YELLOW}$((total_clients - connected_clients))${NC}"
     echo ""
     
-    if [ $connected_clients -gt 0 ]; then
+    if [ $connected_clients -gt 0 ] && systemctl is-active --quiet wg-quick@wg0; then
         echo -e "${BLUE}Clientes Conectados:${NC}"
         echo "-------------------"
         wg show wg0 | grep "peer:" | while read line; do
             peer_key=$(echo $line | awk '{print $2}')
             for client_file in $CLIENTS_DIR/*.conf; do
                 client_private_key=$(grep "PrivateKey" "$client_file" | awk '{print $3}')
-                client_public_key=$(echo "$client_private_key" | wg pubkey)
+                client_public_key=$(echo "$client_private_key" | wg pubkey 2>/dev/null)
                 if [ "$client_public_key" = "$peer_key" ]; then
                     client_name=$(basename "$client_file" .conf)
                     echo -e "${GREEN}✓ $client_name${NC}"
@@ -413,9 +498,11 @@ show_statistics() {
     fi
     
     echo ""
-    echo -e "${BLUE}Uso de Transferência:${NC}"
-    echo "----------------------"
-    wg show wg0 transfers
+    if systemctl is-active --quiet wg-quick@wg0; then
+        echo -e "${BLUE}Uso de Transferência:${NC}"
+        echo "----------------------"
+        wg show wg0 transfers
+    fi
     
     pause
 }
@@ -465,15 +552,18 @@ install_management_menu() {
     log "Instalando menu de gerenciamento..."
     
     # Create management script
-    cat > /usr/local/bin/vpn-manager << 'EOF'
+    cat > /usr/local/bin/vpn-manager << EOF
 #!/bin/bash
-# Este script é instalado automaticamente pelo vpn-complete-setup.sh
-# Use o script original para gerenciamento completo
-/usr/local/bin/vpn-complete-setup.sh menu
+# Este script é instalado automaticamente pelo $SCRIPT_NAME
+sudo $SCRIPT_NAME menu
 EOF
 
     # Make executable
     chmod +x /usr/local/bin/vpn-manager
+    
+    # Also copy main script to /usr/local/bin
+    cp $0 /usr/local/bin/$SCRIPT_NAME
+    chmod +x /usr/local/bin/$SCRIPT_NAME
     
     log "Menu de gerenciamento instalado em /usr/local/bin/vpn-manager"
 }
@@ -526,48 +616,6 @@ main() {
         install_wireguard
         install_management_menu
         show_final_instructions
-    fi
-}
-
-# Function to show final instructions
-show_final_instructions() {
-    header
-    echo -e "${GREEN}
-===================================================
-         INSTALAÇÃO CONCLUÍDA COM SUCESSO!
-===================================================
-
-${YELLOW}INFORMAÇÕES DO SERVIDOR:${NC}
-- Endpoint: $(curl -4 -s ifconfig.co):51820
-- Interface: wg0
-- Rede: 10.0.0.0/24
-
-${YELLOW}COMANDOS DISPONÍVEIS:${NC}
-- ${GREEN}vpn-manager${NC}          - Menu interativo de gerenciamento
-- ${GREEN}sudo vpn-complete-setup.sh${NC} - Script completo (instalação + menu)
-
-${YELLOW}PRÓXIMOS PASSOS:${NC}
-1. Execute: ${GREEN}vpn-manager${NC}
-2. Adicione clientes pelo menu
-3. Use QR code ou arquivos .conf nos clientes
-
-${YELLOW}APPS WIREGUARD:${NC}
-- Android: Play Store
-- iOS: App Store  
-- Windows: Microsoft Store
-- macOS: App Store
-- Linux: pacote 'wireguard-tools'
-
-===================================================
-${NC}"
-
-    # Start management menu
-    echo ""
-    read -p "Abrir menu de gerenciamento agora? (s/N): " open_menu
-    if [[ $open_menu =~ ^[Ss]$ ]]; then
-        management_menu
-    else
-        echo -e "${GREEN}Execute 'vpn-manager' a qualquer momento para gerenciar sua VPN.${NC}"
     fi
 }
 
