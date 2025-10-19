@@ -47,7 +47,7 @@ Depois, reinicie o serviço: sudo systemctl restart wg-quick@wg0
 🔄 Reiniciar o WireGuard: sudo systemctl restart wg-quick@wg0
 
 #Menu
-bash <(curl -s https://raw.githubusercontent.com/Fabricio94Bz/wireguard-install/main/wireguard-manager.sh)
+bash <(curl -s https://raw.githubusercontent.com/Fabricio94Bz/WireGuard/main/wireguard-manager.sh)
 
 
 
