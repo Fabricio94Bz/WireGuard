@@ -46,5 +46,9 @@ Depois, reinicie o serviço: sudo systemctl restart wg-quick@wg0
 🔍 Verificar status da VPN: sudo wg
 🔄 Reiniciar o WireGuard: sudo systemctl restart wg-quick@wg0
 
+#Menu
+bash <(curl -s https://raw.githubusercontent.com/SEU_USUARIO/wireguard-install/main/wireguard-manager.sh)
+
+
 
 
